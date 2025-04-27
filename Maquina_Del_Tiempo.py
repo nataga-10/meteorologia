@@ -291,10 +291,10 @@ class EstacionMeteoApp:
         ttk.Button(buttons_frame, text="Actualizar Datos", 
                 command=lambda: self.send_predefined_command("DATOS"), 
                 style="Command.TButton").pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(buttons_frame, text="Datos por Rango", 
-                command=self.download_data_by_range, 
-                style="Command.TButton").pack(side=tk.LEFT, padx=5)
+        # Se implemento en PROCESARGUI
+        # ttk.Button(buttons_frame, text="Datos por Rango", 
+        #         command=self.download_data_by_range, 
+        #         style="Command.TButton").pack(side=tk.LEFT, padx=5)
         
         ttk.Button(buttons_frame, text="Cargar Caché", 
                 command=self.load_data_cache, 
@@ -306,9 +306,9 @@ class EstacionMeteoApp:
                 
         ttk.Button(buttons_frame, text="Guardar Original", 
                 command=self.export_original_data).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(buttons_frame, text="Guardar Procesado", 
-                command=self.export_processed_data).pack(side=tk.LEFT, padx=5)
+          # Se implemento en PROCESARGUI
+        # ttk.Button(buttons_frame, text="Guardar Procesado", 
+        #         command=self.export_processed_data).pack(side=tk.LEFT, padx=5)
         
         # Controles de actualización automática
         auto_frame = ttk.Frame(control_frame)

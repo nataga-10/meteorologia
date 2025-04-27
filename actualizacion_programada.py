@@ -10,7 +10,7 @@ if script_dir not in sys.path:
     sys.path.append(script_dir)
 
 # Importar funciones necesarias
-from microclima_main import integrar_datasets
+from meteo_main import integrar_datasets
 from predictor_model import PrediccionMicroclima
 
 def tarea_actualizacion():

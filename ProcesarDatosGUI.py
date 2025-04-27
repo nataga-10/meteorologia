@@ -140,10 +140,6 @@ def preparar_datos_estacion(ruta_original, ruta_salida=None, convertir_a_horario
         # Mostrar primeros valores convertidos
         print("Valores convertidos a J/m²:")
         print(nuevo_df['radiacion_solar_J_m2'].head(3).values)
-        
-        # Eliminar columna original
-        nuevo_df = nuevo_df.drop('radiacion_solar_wm2', axis=1)
-        print("Columna 'radiacion_solar_wm2' eliminada tras la conversión")
     else:
         print("No se realizó conversión de radiación solar (Ya está en J/m² o no se encontró la columna)")
     
@@ -247,11 +243,12 @@ def preparar_datos_estacion(ruta_original, ruta_salida=None, convertir_a_horario
             mismo_dia = nuevo_df['fecha'].dt.date == hora_exacta.date()
             
             # Calcular la diferencia en minutos entre cada registro y la hora exacta
-            diferencias = abs((nuevo_df.loc[mismo_dia, 'fecha'] - hora_exacta).dt.total_seconds() / 60)
-            
-            if not diferencias.empty:
+            if mismo_dia.any():  # Solo proceder si hay registros del mismo día
+                diferencias = abs((nuevo_df.loc[mismo_dia, 'fecha'] - hora_exacta).dt.total_seconds() / 60)
+                
                 # Encontrar el índice del registro más cercano
-                idx_cercano = diferencias.idxmin()
+                idx_min = diferencias.argmin()  # Usar argmin en lugar de idxmin
+                idx_cercano = diferencias.index[idx_min]
                 registro_cercano = nuevo_df.loc[idx_cercano].copy()
                 
                 # Para comprobar: mostrar la fecha original y la diferencia en minutos
@@ -267,25 +264,52 @@ def preparar_datos_estacion(ruta_original, ruta_salida=None, convertir_a_horario
                 # Agregar al DataFrame de resultados
                 df_procesado = pd.concat([df_procesado, pd.DataFrame([registro_cercano])], ignore_index=True)
         
-        # Para radiación solar, si se desea un promedio en lugar del valor más cercano
-        if 'radiacion_solar_J_m2' in nuevo_df.columns:
-            print("Calculando promedio de radiación solar para cada hora...")
+        # Cálculo específico para radiación solar en J/m²
+        if 'radiacion_solar_wm2' in nuevo_df.columns:
+            print("Calculando radiación solar horaria correctamente...")
             
-            # Establecer el índice temporal para el cálculo del promedio de radiación
-            temp_df = nuevo_df.set_index('fecha')
-            
-            # Calcular el promedio horario solo para radiación solar
-            radiacion_promedio = temp_df['radiacion_solar_J_m2'].resample('1H').mean()
-            
-            # Reemplazar los valores de radiación solar con los promedios
+            # Para cada hora exacta, calcular el promedio de todos los registros de la hora ANTERIOR
             for idx, hora in enumerate(df_procesado['fecha']):
-                if hora in radiacion_promedio.index:
-                    df_procesado.loc[idx, 'radiacion_solar_J_m2'] = radiacion_promedio[hora]
-        
-        print(f"Datos convertidos a formato horario: {len(df_procesado)} registros")
+                # Obtener la hora anterior
+                hora_anterior_inicio = hora - pd.Timedelta(hours=1)
+                
+                # Filtrar los registros que caen en la hora anterior
+                registros_hora_anterior = nuevo_df[(nuevo_df['fecha'] >= hora_anterior_inicio) & 
+                                                (nuevo_df['fecha'] < hora)]
+                
+                # Si hay registros en esa hora, calcular el promedio
+                if not registros_hora_anterior.empty:
+                    # Calcular el promedio de radiación solar en W/m²
+                    radiacion_promedio_wm2 = registros_hora_anterior['radiacion_solar_wm2'].mean()
+                    
+                    # Convertir a J/m² (multiplicar por 3600 segundos)
+                    radiacion_joules = radiacion_promedio_wm2 * 3600
+                    
+                    # Asignar al DataFrame final
+                    df_procesado.loc[idx, 'radiacion_solar_J_m2'] = radiacion_joules
+                    
+                    if verbose and idx < 5:  # Mostrar algunos ejemplos
+                        print(f"Hora: {hora}")
+                        print(f"  Registros usados: {len(registros_hora_anterior)}")
+                        print(f"  Promedio W/m²: {radiacion_promedio_wm2:.2f}")
+                        print(f"  Total J/m²: {radiacion_joules:.2f}")
+                else:
+                    print(f"ADVERTENCIA: No hay registros para calcular radiación solar en {hora}")
+                    # Mantener el valor original o asignar 0
+                    df_procesado.loc[idx, 'radiacion_solar_J_m2'] = 0
+            
+            print(f"Datos convertidos a formato horario: {len(df_procesado)} registros")
+        else:
+            df_procesado = nuevo_df
+            print(f"Se mantiene la frecuencia original: {len(df_procesado)} registros")
     else:
         df_procesado = nuevo_df
         print(f"Se mantiene la frecuencia original: {len(df_procesado)} registros")
+    
+    # Antes de guardar el resultado, eliminar la columna radiacion_solar_wm2 si existe
+    if 'radiacion_solar_wm2' in df_procesado.columns:
+        df_procesado = df_procesado.drop('radiacion_solar_wm2', axis=1)
+        print("Columna 'radiacion_solar_wm2' eliminada del resultado final")
     
     # Guardar el resultado
     df_procesado.to_csv(ruta_salida, index=False)
@@ -294,27 +318,188 @@ def preparar_datos_estacion(ruta_original, ruta_salida=None, convertir_a_horario
     print(f"Rango de fechas: {df_procesado['fecha'].min()} a {df_procesado['fecha'].max()}")
     
     # Como verificación adicional, mostrar algunos ejemplos de conversión
-    if convertir_a_horario and verbose:
+    if convertir_a_horario and verbose and len(df_procesado) > 0:
         print("\nEjemplos de conversión (original → procesado):")
         # Seleccionar algunas horas al azar para verificar
-        for hora in df_procesado['fecha'].sample(min(5, len(df_procesado))):
-            hora_redondeada = hora.strftime('%Y-%m-%d %H:00')
-            
-            # Encontrar el registro original más cercano a esta hora
-            diferencias = abs((nuevo_df['fecha'] - hora).dt.total_seconds())
-            idx_cercano = diferencias.idxmin()
-            registro_orig = nuevo_df.loc[idx_cercano]
-            
-            # Encontrar el registro procesado para esta hora
-            registro_proc = df_procesado[df_procesado['fecha'] == hora]
-            
-            if not registro_proc.empty:
-                print(f"Hora: {hora_redondeada}")
-                cols_to_show = [col for col in df_procesado.columns if col != 'fecha' and col in registro_orig.index]
-                for col in cols_to_show[:3]:  # Mostrar solo las primeras 3 columnas para brevedad
-                    print(f"  {col}: Original={registro_orig[col]}, Procesado={registro_proc[col].values[0]}")
+        muestra = min(5, len(df_procesado))
+        if muestra > 0:
+            for hora in df_procesado['fecha'].sample(muestra):
+                hora_redondeada = hora.strftime('%Y-%m-%d %H:00')
+                
+                # Encontrar el registro original más cercano a esta hora
+                diferencias = abs((nuevo_df['fecha'] - hora).dt.total_seconds())
+                idx_min = diferencias.argmin()  # Usar argmin en lugar de idxmin
+                idx_cercano = diferencias.index[idx_min]
+                registro_orig = nuevo_df.loc[idx_cercano]
+                
+                # Encontrar el registro procesado para esta hora
+                registro_proc = df_procesado[df_procesado['fecha'] == hora]
+                
+                if not registro_proc.empty:
+                    print(f"Hora: {hora_redondeada}")
+                    # Mostrar solo columnas que existen en ambos DataFrames
+                    cols_to_show = [col for col in df_procesado.columns if col != 'fecha' and col in registro_orig.index]
+                    for col in cols_to_show[:3]:  # Mostrar solo las primeras 3 columnas para brevedad
+                        print(f"  {col}: Original={registro_orig[col]}, Procesado={registro_proc[col].values[0]}")
     
     return ruta_salida
+def exportar_a_pdf(ruta_csv, ruta_pdf=None):
+    """
+    Convierte un archivo CSV procesado a formato PDF con una tabla formateada.
+    
+    Args:
+        ruta_csv: Ruta al archivo CSV de entrada
+        ruta_pdf: Ruta donde guardar el PDF (si es None, se usa la misma ruta que el CSV pero con extensión .pdf)
+    
+    Returns:
+        ruta_pdf: Ruta del archivo PDF generado
+    """
+    import pandas as pd
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import inch, cm
+    import os
+    from datetime import datetime
+    
+    print(f"Convirtiendo archivo CSV a PDF: {ruta_csv}")
+    
+    # Generar nombre de archivo PDF si no se proporciona
+    if ruta_pdf is None:
+        ruta_pdf = os.path.splitext(ruta_csv)[0] + ".pdf"
+    
+    # Cargar los datos del CSV
+    df = pd.read_csv(ruta_csv)
+    
+    # Eliminar la columna radiacion_solar_wm2 si existe
+    if 'radiacion_solar_wm2' in df.columns:
+        df = df.drop('radiacion_solar_wm2', axis=1)
+        
+        # También modificar el CSV original para quitar esta columna
+        df.to_csv(ruta_csv, index=False)
+        print("Columna 'radiacion_solar_wm2' eliminada del CSV y PDF")
+    
+    # Crear el documento PDF con márgenes más pequeños para aprovechar espacio
+    doc = SimpleDocTemplate(
+        ruta_pdf,
+        pagesize=landscape(letter),
+        rightMargin=1.5*cm,
+        leftMargin=1.5*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
+    )
+    
+    # Obtener estilos para el documento
+    styles = getSampleStyleSheet()
+    
+    # Crear elementos para agregar al PDF
+    elements = []
+    
+    # Agregar título
+    title_style = styles["Heading1"]
+    title_style.alignment = 1  # Centrado
+    title = Paragraph("Informe de Datos Meteorológicos", title_style)
+    elements.append(title)
+    elements.append(Spacer(1, 20))
+    
+    # Agregar información de fecha y hora
+    fecha_generacion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subtitle_style = styles["Heading3"]
+    subtitle = Paragraph(f"Generado el: {fecha_generacion}", subtitle_style)
+    elements.append(subtitle)
+    
+    # Información sobre el rango de fechas en los datos
+    if 'fecha' in df.columns:
+        df['fecha'] = pd.to_datetime(df['fecha'])
+        fecha_min = df['fecha'].min().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_max = df['fecha'].max().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_range = Paragraph(f"Rango de datos: {fecha_min} a {fecha_max}", subtitle_style)
+        elements.append(fecha_range)
+    
+    # Agregar línea de crédito
+    elements.append(Spacer(1, 10))
+    info = Paragraph(f"Datos Máquina Del Tiempo By: Bryan Rojas & Nathalia Guitierrez", styles["Normal"])
+    elements.append(info)
+    
+    elements.append(Spacer(1, 20))
+    
+    # Limitar la cantidad de filas si hay demasiadas (para evitar PDFs enormes)
+    max_rows = None  # Sin límite
+    original_len = len(df)
+    
+    # Si max_rows está definido y hay más filas que el límite, truncar
+    if max_rows is not None and len(df) > max_rows:
+        info = Paragraph(f"Nota: Mostrando las primeras {max_rows} filas de {len(df)} registros totales.", styles["Italic"])
+        elements.append(info)
+        elements.append(Spacer(1, 10))
+        df = df.head(max_rows)
+    
+    # Preparar los datos para la tabla
+    data = [df.columns.tolist()]  # Encabezados
+    
+    # Convertir cada fila a una lista y agregarla a los datos
+    for i, row in df.iterrows():
+        # Formatear los valores numéricos a 2 decimales
+        row_formatted = []
+        for val in row:
+            if isinstance(val, float):
+                row_formatted.append(f"{val:.2f}")
+            else:
+                row_formatted.append(str(val))
+        data.append(row_formatted)
+    
+    # Crear la tabla con un ancho específico 
+    # Calculamos el ancho disponible en la página
+    available_width = landscape(letter)[0] - 3*cm  # Ancho de página menos márgenes
+    col_count = len(df.columns)
+    
+    # Definir columnas más anchas para fechas y valores numéricos más importantes
+    # Con la columna radiacion_solar_wm2 eliminada, podemos redistribuir el espacio
+    col_widths = [available_width * x for x in [0.20, 0.12, 0.12, 0.12, 0.17, 0.14, 0.13]]
+    
+    # Asegurarnos de que tenemos el número correcto de anchos de columna
+    if len(col_widths) > col_count:
+        col_widths = col_widths[:col_count]
+    elif len(col_widths) < col_count:
+        # Distribuir el espacio restante uniformemente para las columnas faltantes
+        remaining_width = available_width - sum(col_widths)
+        remaining_cols = col_count - len(col_widths)
+        for _ in range(remaining_cols):
+            col_widths.append(remaining_width / remaining_cols)
+    
+    table = Table(data, repeatRows=1, colWidths=col_widths)
+    
+    # Estilo de la tabla con fuente más pequeña
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),  # Encabezado azul claro
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),       # Texto negro en encabezado
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),              # Centrar todo el texto
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),    # Encabezado en negrita
+        ('FONTSIZE', (0, 0), (-1, 0), 8),                   # Tamaño de fuente encabezado
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),             # Padding encabezado
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),     # Fondo blanco para datos
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),        # Bordes negros
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),        # Fuente datos
+        ('FONTSIZE', (0, 1), (-1, -1), 7),                  # Tamaño de fuente datos
+        # Alternar colores de fila para mejor legibilidad
+        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
+    ])
+    
+    # Aplicar el estilo alternado de filas
+    for i in range(1, len(data), 2):
+        table_style.add('BACKGROUND', (0, i), (-1, i), colors.lightgrey)
+    
+    table.setStyle(table_style)
+    
+    # Agregar la tabla
+    elements.append(table)
+    
+    # Generar el PDF
+    doc.build(elements)
+    
+    print(f"PDF generado exitosamente: {ruta_pdf}")
+    return ruta_pdf
 
 class EstacionMeteorologicaGUI:
     def __init__(self, root):
@@ -332,6 +517,7 @@ class EstacionMeteorologicaGUI:
         self.style.configure("TButton", background="white")
         self.style.configure("TCheckbutton", background="white")
         self.style.configure("TLabel", background="white")
+        self.exportar_pdf = tk.BooleanVar(value=False)
         
         # Establecer ícono si está disponible
         try:
@@ -375,7 +561,7 @@ class EstacionMeteorologicaGUI:
         
         ttk.Checkbutton(opciones_frame, text="Convertir a formato horario", variable=self.convertir_horario).grid(row=0, column=0, sticky=tk.W, pady=5)
         ttk.Checkbutton(opciones_frame, text="Rellenar valores faltantes con último valor observado", variable=self.rellenar_faltantes).grid(row=1, column=0, sticky=tk.W, pady=5)
-        
+        ttk.Checkbutton(opciones_frame, text="Exportar también a PDF", variable=self.exportar_pdf).grid(row=2, column=0, sticky=tk.W, pady=5)
         # Sección de filtro de fechas
         filtro_frame = ttk.LabelFrame(self.main_frame, text="Filtro de Fechas", padding="10")
         filtro_frame.pack(fill=tk.X, pady=10)
@@ -569,22 +755,77 @@ class EstacionMeteorologicaGUI:
                     self.log(f"Datos filtrados guardados en: {nombre_filtrado}")
                     self.log(f"Registros originales: {len(df)}, Registros filtrados: {len(df_filtrado)}")
                     
-                    # Mostrar mensaje con resumen
-                    messagebox.showinfo("Proceso Completado", 
-                                       f"Procesamiento y filtrado completados.\n\n"
-                                       f"Archivo original: {len(df)} registros\n"
-                                       f"Archivo filtrado: {len(df_filtrado)} registros\n\n"
-                                       f"Los datos han sido guardados en:\n{nombre_filtrado}")
+                    # AQUÍ EMPIEZA LA MODIFICACIÓN - EXPORTACIÓN A PDF
+                    # Si se seleccionó la opción de exportar a PDF
+                    if self.exportar_pdf.get():
+                        self.log("\n" + "="*60)
+                        self.log("INICIANDO EXPORTACIÓN A PDF")
+                        self.log("="*60)
+                        
+                        # Exportar archivo principal a PDF
+                        pdf_path = exportar_a_pdf(archivo_procesado)
+                        self.log(f"PDF generado: {pdf_path}")
+                        
+                        # Exportar archivo filtrado a PDF
+                        pdf_path_filtrado = exportar_a_pdf(nombre_filtrado)
+                        self.log(f"PDF filtrado generado: {pdf_path_filtrado}")
+                        
+                        # Mostrar mensaje con resumen incluyendo PDFs
+                        messagebox.showinfo("Proceso Completado", 
+                                        f"Procesamiento y filtrado completados.\n\n"
+                                        f"CSV original: {archivo_procesado}\n"
+                                        f"PDF original: {pdf_path}\n\n"
+                                        f"CSV filtrado ({len(df_filtrado)} registros): {nombre_filtrado}\n"
+                                        f"PDF filtrado: {pdf_path_filtrado}")
+                    else:
+                        # Mensaje original sin PDF
+                        messagebox.showinfo("Proceso Completado", 
+                                        f"Procesamiento y filtrado completados.\n\n"
+                                        f"Archivo original: {len(df)} registros\n"
+                                        f"Archivo filtrado: {len(df_filtrado)} registros\n\n"
+                                        f"Los datos han sido guardados en:\n{nombre_filtrado}")
                 else:
                     self.log("Filtro de fechas seleccionado pero no se proporcionaron fechas válidas")
-                    messagebox.showinfo("Proceso Completado", 
-                                       "Procesamiento completado sin filtrar.\n\n"
-                                       f"Los datos han sido guardados en:\n{archivo_procesado}")
+                    
+                    # Si se seleccionó la opción de exportar a PDF (sin filtrado)
+                    if self.exportar_pdf.get():
+                        self.log("\n" + "="*60)
+                        self.log("INICIANDO EXPORTACIÓN A PDF")
+                        self.log("="*60)
+                        
+                        pdf_path = exportar_a_pdf(archivo_procesado)
+                        self.log(f"PDF generado: {pdf_path}")
+                        
+                        messagebox.showinfo("Proceso Completado", 
+                                        f"Procesamiento completado sin filtrar.\n\n"
+                                        f"CSV: {archivo_procesado}\n"
+                                        f"PDF: {pdf_path}")
+                    else:
+                        messagebox.showinfo("Proceso Completado", 
+                                        "Procesamiento completado sin filtrar.\n\n"
+                                        f"Los datos han sido guardados en:\n{archivo_procesado}")
             else:
+                # Si no hay filtrado
                 self.log("\n¡Procesamiento completado con éxito!")
-                messagebox.showinfo("Proceso Completado", 
-                                   f"Procesamiento completado.\n\n"
-                                   f"Los datos han sido guardados en:\n{archivo_procesado}")
+                
+                # Si se seleccionó la opción de exportar a PDF (sin filtrado)
+                if self.exportar_pdf.get():
+                    self.log("\n" + "="*60)
+                    self.log("INICIANDO EXPORTACIÓN A PDF")
+                    self.log("="*60)
+                    
+                    pdf_path = exportar_a_pdf(archivo_procesado)
+                    self.log(f"PDF generado: {pdf_path}")
+                    
+                    messagebox.showinfo("Proceso Completado", 
+                                    f"Procesamiento completado.\n\n"
+                                    f"CSV: {archivo_procesado}\n"
+                                    f"PDF: {pdf_path}")
+                else:
+                    messagebox.showinfo("Proceso Completado", 
+                                    f"Procesamiento completado.\n\n"
+                                    f"Los datos han sido guardados en:\n{archivo_procesado}")
+            # FIN DE LA MODIFICACIÓN
             
         except Exception as e:
             import traceback
